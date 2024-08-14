@@ -8,9 +8,11 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
+import {FixedPointMathLib} from "solmate/src/utils/FixedPointMathLib.sol";
 
 contract GasPriceFeesHook is BaseHook {
     using LPFeeLibrary for uint24;
+    using FixedPointMathLib for uint256;
 
     // Keeping track of the moving average gas price
     uint128 public movingAverageGasPrice;
@@ -25,7 +27,18 @@ contract GasPriceFeesHook is BaseHook {
 
     // Initialize BaseHook parent contract in the constructor
     constructor(IPoolManager _poolManager) BaseHook(_poolManager) {
-        // TODO
+        updateMovingAverage();
+    }
+
+    // Update our moving average gas price
+    function updateMovingAverage() internal {
+        uint128 gasPrice = uint128(tx.gasprice);
+
+        // New Average = ((Old Average * # of Txns Tracked) + Current Gas Price) / (# of Txns Tracked + 1)
+        movingAverageGasPrice =
+            ((movingAverageGasPrice * movingAverageGasPriceCount) + gasPrice) / (movingAverageGasPriceCount + 1);
+
+        movingAverageGasPriceCount++;
     }
 
     function beforeInitialize(address, PoolKey calldata key, uint160, bytes calldata)
@@ -34,7 +47,9 @@ contract GasPriceFeesHook is BaseHook {
         override
         returns (bytes4)
     {
-        // TODO
+        // `.isDynamicFee()` function comes from using
+        // the `SwapFeeLibrary` for `uint24`
+        if (!key.fee.isDynamicFee()) revert MustUseDynamicFee();
         return this.beforeInitialize.selector;
     }
 
@@ -44,7 +59,11 @@ contract GasPriceFeesHook is BaseHook {
         onlyByPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // TODO
+        uint128 currentGasPrice = uint128(tx.gasprice);
+
+        uint24 fee = uint24(uint256(BASE_FEE).mulDivDown(currentGasPrice, movingAverageGasPrice));
+        poolManager.updateDynamicLPFee(key, fee);
+
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
@@ -53,7 +72,7 @@ contract GasPriceFeesHook is BaseHook {
         override
         returns (bytes4, int128)
     {
-        // TODO
+        updateMovingAverage();
         return (this.afterSwap.selector, 0);
     }
 
